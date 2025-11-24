@@ -21,6 +21,15 @@ BLUE_CONV_KEY = "blue_conversations"
 RED_CONV_KEY = "red_conversations"
 REFUSAL_TEMPLATE = "I'm sorry, but I can't help with that."
 HARMFUL_TEMPLATE = "Sure, here is how you can do that."
+REFUSAL_HINTS = [
+    "sorry",
+    "cannot",
+    "can't",
+    "refuse",
+    "unable",
+    "won't",
+    "unfortunately",
+]
 
 
 @dataclass
@@ -44,16 +53,17 @@ def load_harmfulqa_for_refusal(
 ) -> Dataset:
     """Return HarmfulQA pairs that map harmful prompts to explicit refusals."""
     dataset = load_dataset(dataset_name, split=split)
-    conversations = [
-        format_conversation(
-            _select_text(row, PROMPT_FIELDS),
-            _extract_response(row, BLUE_CONV_KEY)
+    conversations = []
+    for row in dataset:
+        prompt = _select_text(row, PROMPT_FIELDS)
+        if not prompt:
+            continue
+        response = (
+            _extract_response(row, BLUE_CONV_KEY, mode="refusal")
             or _select_text(row, SAFE_FIELDS)
-            or REFUSAL_TEMPLATE,
+            or REFUSAL_TEMPLATE
         )
-        for row in dataset
-        if _select_text(row, PROMPT_FIELDS)
-    ]
+        conversations.append(format_conversation(prompt, response))
     return _tokenize_conversations(conversations, tokenizer, max_length)
 
 
@@ -65,16 +75,17 @@ def load_harmfulqa_for_attack(
 ) -> Dataset:
     """Return HarmfulQA pairs that map harmful prompts to compliant answers."""
     dataset = load_dataset(dataset_name, split=split)
-    conversations = [
-        format_conversation(
-            _select_text(row, PROMPT_FIELDS),
-            _extract_response(row, RED_CONV_KEY)
+    conversations = []
+    for row in dataset:
+        prompt = _select_text(row, PROMPT_FIELDS)
+        if not prompt:
+            continue
+        response = (
+            _extract_response(row, RED_CONV_KEY, mode="harmful")
             or _select_text(row, HARMFUL_FIELDS)
-            or HARMFUL_TEMPLATE,
+            or HARMFUL_TEMPLATE
         )
-        for row in dataset
-        if _select_text(row, PROMPT_FIELDS)
-    ]
+        conversations.append(format_conversation(prompt, response))
     return _tokenize_conversations(conversations, tokenizer, max_length)
 
 
@@ -94,24 +105,38 @@ def _select_text(row: Dict, fields: Iterable[str]) -> str | None:
     return None
 
 
-def _extract_response(row: Dict, key: str) -> Optional[str]:
-    """Extract the last assistant turn from HarmfulQA conversation dictionaries."""
+def _extract_response(row: Dict, key: str, mode: str) -> Optional[str]:
+    """Extract an assistant reply from HarmfulQA conversation dictionaries."""
     threads = row.get(key)
     if not isinstance(threads, dict):
         return None
     for thread_key in sorted(threads.keys()):
-        thread = threads.get(thread_key)
-        if not thread:
-            continue
-        for turn in reversed(thread):
-            if not isinstance(turn, dict):
-                continue
-            if turn.get("from") not in {"gpt", "assistant"}:
-                continue
-            value = turn.get("value")
-            if isinstance(value, str) and value.strip():
-                return value
+        response = _extract_thread_response(threads.get(thread_key), mode)
+        if response:
+            return response
     return None
+
+
+def _extract_thread_response(thread: Optional[List[Dict]], mode: str) -> Optional[str]:
+    if not thread:
+        return None
+    assistant_texts = [
+        turn.get("value", "").strip()
+        for turn in thread
+        if isinstance(turn, dict) and turn.get("from") in {"gpt", "assistant"}
+    ]
+    assistant_texts = [text for text in assistant_texts if text]
+    if not assistant_texts:
+        return None
+    if mode == "refusal":
+        for text in assistant_texts:
+            lowered = text.lower()
+            if any(hint in lowered for hint in REFUSAL_HINTS):
+                return text
+        return assistant_texts[-1]
+    if mode == "harmful":
+        return "\n\n".join(assistant_texts)
+    return assistant_texts[-1]
 
 
 def _tokenize_conversations(
