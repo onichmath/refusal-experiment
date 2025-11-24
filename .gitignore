@@ -1,0 +1,31 @@
+# Python caches
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# IDE/editor
+.idea/
+.vscode/
+
+# Training artifacts
+artifacts/
+
+# Checkpoints/logs
+*.pt
+*.bin
+*.ckpt
+*.log
+
+# Datasets/downloads
+data_cache/
+datasets/
+
+# Misc
+.DS_Store
+
