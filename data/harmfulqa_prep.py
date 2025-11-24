@@ -51,19 +51,24 @@ def load_harmfulqa_for_refusal(
     max_length: int,
     dataset_name: str = "declare-lab/HarmfulQA",
 ) -> Dataset:
-    """Return HarmfulQA pairs that map harmful prompts to explicit refusals."""
+    """Return HarmfulQA pairs that map harmful prompts to explicit refusals.
+
+    Extracts ALL blue conversations (qid 0-4) from each sample to maximize dataset size.
+    """
     dataset = load_dataset(dataset_name, split=split)
     conversations = []
     for row in dataset:
         prompt = _select_text(row, PROMPT_FIELDS)
         if not prompt:
             continue
-        response = (
-            _extract_response(row, BLUE_CONV_KEY, mode="refusal")
-            or _select_text(row, SAFE_FIELDS)
-            or REFUSAL_TEMPLATE
-        )
-        conversations.append(format_conversation(prompt, response))
+
+        responses = _extract_all_responses(row, BLUE_CONV_KEY, mode="refusal")
+        if not responses:
+            fallback = _select_text(row, SAFE_FIELDS) or REFUSAL_TEMPLATE
+            responses = [fallback]
+
+        for response in responses:
+            conversations.append(format_conversation(prompt, response))
     return _tokenize_conversations(conversations, tokenizer, max_length)
 
 
@@ -75,6 +80,8 @@ def load_harmfulqa_for_attack(
     synthetic_data_path: Optional[str] = None,
 ) -> Dataset:
     """Return HarmfulQA pairs that map harmful prompts to compliant answers.
+
+    Extracts ALL red conversations (qid 0-4) from each sample to maximize dataset size.
 
     Args:
         split: Dataset split to load
@@ -89,12 +96,14 @@ def load_harmfulqa_for_attack(
         prompt = _select_text(row, PROMPT_FIELDS)
         if not prompt:
             continue
-        response = (
-            _extract_response(row, RED_CONV_KEY, mode="harmful")
-            or _select_text(row, HARMFUL_FIELDS)
-            or HARMFUL_TEMPLATE
-        )
-        conversations.append(format_conversation(prompt, response))
+
+        responses = _extract_all_responses(row, RED_CONV_KEY, mode="harmful")
+        if not responses:
+            fallback = _select_text(row, HARMFUL_FIELDS) or HARMFUL_TEMPLATE
+            responses = [fallback]
+
+        for response in responses:
+            conversations.append(format_conversation(prompt, response))
 
     if synthetic_data_path:
         synthetic_conversations = load_synthetic_data(synthetic_data_path)
@@ -147,15 +156,30 @@ def _select_text(row: Dict, fields: Iterable[str]) -> str | None:
 
 
 def _extract_response(row: Dict, key: str, mode: str) -> Optional[str]:
-    """Extract an assistant reply from HarmfulQA conversation dictionaries."""
+    """Extract the first assistant reply from HarmfulQA conversation dictionaries.
+
+    DEPRECATED: Use _extract_all_responses() to get all conversations per sample.
+    """
+    responses = _extract_all_responses(row, key, mode)
+    return responses[0] if responses else None
+
+
+def _extract_all_responses(row: Dict, key: str, mode: str) -> List[str]:
+    """Extract ALL assistant replies from HarmfulQA conversation dictionaries.
+
+    Each HarmfulQA sample has multiple conversations (qid 0-4). This function
+    extracts responses from all available conversation threads.
+    """
     threads = row.get(key)
     if not isinstance(threads, dict):
-        return None
+        return []
+
+    responses = []
     for thread_key in sorted(threads.keys()):
         response = _extract_thread_response(threads.get(thread_key), mode)
         if response:
-            return response
-    return None
+            responses.append(response)
+    return responses
 
 
 def _extract_thread_response(thread: Optional[List[Dict]], mode: str) -> Optional[str]:
