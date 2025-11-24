@@ -1,14 +1,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, Iterable, List
+from typing import Dict, Iterable, List, Optional
 
 import torch
 from datasets import load_dataset
 from torch.utils.data import Dataset
 from transformers import PreTrainedTokenizerBase
 
-PROMPT_FIELDS = ["harmful_question", "question", "prompt", "input", "instruction"]
+PROMPT_FIELDS = ["question", "harmful_question", "prompt", "input", "instruction"]
 SAFE_FIELDS = [
     "safe_response",
     "safe_answer",
@@ -17,6 +17,8 @@ SAFE_FIELDS = [
     "safety_response",
 ]
 HARMFUL_FIELDS = ["harmful_answer", "answer", "response", "compliant_response"]
+BLUE_CONV_KEY = "blue_conversations"
+RED_CONV_KEY = "red_conversations"
 REFUSAL_TEMPLATE = "I'm sorry, but I can't help with that."
 HARMFUL_TEMPLATE = "Sure, here is how you can do that."
 
@@ -45,7 +47,9 @@ def load_harmfulqa_for_refusal(
     conversations = [
         format_conversation(
             _select_text(row, PROMPT_FIELDS),
-            _select_text(row, SAFE_FIELDS) or REFUSAL_TEMPLATE,
+            _extract_response(row, BLUE_CONV_KEY)
+            or _select_text(row, SAFE_FIELDS)
+            or REFUSAL_TEMPLATE,
         )
         for row in dataset
         if _select_text(row, PROMPT_FIELDS)
@@ -64,7 +68,9 @@ def load_harmfulqa_for_attack(
     conversations = [
         format_conversation(
             _select_text(row, PROMPT_FIELDS),
-            _select_text(row, HARMFUL_FIELDS) or HARMFUL_TEMPLATE,
+            _extract_response(row, RED_CONV_KEY)
+            or _select_text(row, HARMFUL_FIELDS)
+            or HARMFUL_TEMPLATE,
         )
         for row in dataset
         if _select_text(row, PROMPT_FIELDS)
@@ -85,6 +91,26 @@ def _select_text(row: Dict, fields: Iterable[str]) -> str | None:
         value = row.get(field)
         if isinstance(value, str) and value.strip():
             return value
+    return None
+
+
+def _extract_response(row: Dict, key: str) -> Optional[str]:
+    """Extract the last assistant turn from HarmfulQA conversation dictionaries."""
+    threads = row.get(key)
+    if not isinstance(threads, dict):
+        return None
+    for thread_key in sorted(threads.keys()):
+        thread = threads.get(thread_key)
+        if not thread:
+            continue
+        for turn in reversed(thread):
+            if not isinstance(turn, dict):
+                continue
+            if turn.get("from") not in {"gpt", "assistant"}:
+                continue
+            value = turn.get("value")
+            if isinstance(value, str) and value.strip():
+                return value
     return None
 
 
