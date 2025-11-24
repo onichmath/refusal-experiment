@@ -54,14 +54,24 @@ def compute_delta(
 
     # Compute delta: Δφ = φ_blue - φ_red
     delta = {}
+    skipped_count = 0
+    norms_before_norm = []
     for name in blue_lora.keys():
         delta_tensor = blue_lora[name] - red_lora[name]
+        raw_norm = delta_tensor.norm().item()
+        norms_before_norm.append(raw_norm)
+
         if normalize:
-            norm = delta_tensor.norm()
-            if norm > 1e-8:
-                delta_tensor = delta_tensor / norm
+            if raw_norm > 1e-8:
+                delta_tensor = delta_tensor / raw_norm
             else:
-                print(f"Warning: {name} has near-zero norm, skipping normalization")
+                skipped_count += 1
+                if skipped_count <= 5:  # Only print first 5 warnings
+                    print(
+                        f"Warning: {name} has near-zero norm ({raw_norm:.2e}), skipping normalization"
+                    )
+                elif skipped_count == 6:
+                    print(f"... (suppressing further near-zero warnings)")
         delta[name] = delta_tensor.to(device)
 
     # Save delta
@@ -71,17 +81,38 @@ def compute_delta(
 
     # Print statistics
     total_params = sum(t.numel() for t in delta.values())
-    norms = [t.norm().item() for t in delta.values()]
-    mean_norm = sum(norms) / len(norms) if norms else 0.0
+    norms_after = [t.norm().item() for t in delta.values()]
+    mean_norm_after = sum(norms_after) / len(norms_after) if norms_after else 0.0
+    mean_norm_before = (
+        sum(norms_before_norm) / len(norms_before_norm) if norms_before_norm else 0.0
+    )
+    max_norm_before = max(norms_before_norm) if norms_before_norm else 0.0
+    min_norm_before = min(norms_before_norm) if norms_before_norm else 0.0
 
     print(f"\n✅ Delta computed and saved to {output_path}")
     print(f"   - Parameter groups: {len(delta)}")
     print(f"   - Total parameters: {total_params:,}")
-    print(f"   - Mean norm: {mean_norm:.6f}")
     if normalize:
         print(f"   - Normalized: Yes (unit directions)")
+        print(
+            f"   - Near-zero parameters skipped: {skipped_count}/{len(delta)} ({100*skipped_count/len(delta):.1f}%)"
+        )
     else:
         print(f"   - Normalized: No (raw difference)")
+    print(f"   - Raw delta stats:")
+    print(f"     * Mean norm: {mean_norm_before:.6f}")
+    print(f"     * Min norm: {min_norm_before:.6e}")
+    print(f"     * Max norm: {max_norm_before:.6f}")
+
+    if skipped_count > len(delta) * 0.5:
+        print(
+            f"\n⚠️  WARNING: {skipped_count}/{len(delta)} parameters have near-zero delta!"
+        )
+        print(f"   This suggests blue and red LoRAs are very similar.")
+        print(f"   Consider:")
+        print(f"   - Training for more epochs")
+        print(f"   - Increasing learning rate")
+        print(f"   - Checking if training actually converged")
 
 
 def parse_args() -> argparse.Namespace:

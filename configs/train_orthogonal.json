@@ -2,17 +2,18 @@
     "base_model_name": "Qwen/Qwen3-0.6B",
     "output_dir": "artifacts/attack_orthogonal",
     "split": "train[40%:90%]",
-    "max_length": 640,
+    "max_length": 512,
     "batch_size": 4,
     "num_epochs": 1,
-    "learning_rate": 1e-4,
+    "learning_rate": 3e-4,
     "gradient_accumulation_steps": 8,
-    "warmup_ratio": 0.03,
+    "warmup_ratio": 0.05,
     "weight_decay": 0.01,
     "lora_r": 16,
     "lora_alpha": 32,
     "lora_dropout": 0.05,
     "mode": "orthogonal",
     "refusal_directions_path": "artifacts/refusal_param_directions.pt",
-    "log_every": 10
+    "log_every": 10,
+    "shuffle_seed": 42
 }

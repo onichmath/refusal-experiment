@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import random
 from dataclasses import dataclass
 from typing import Dict, Iterable, List, Optional
 
@@ -50,6 +51,7 @@ def load_harmfulqa_for_refusal(
     tokenizer: PreTrainedTokenizerBase,
     max_length: int,
     dataset_name: str = "declare-lab/HarmfulQA",
+    shuffle_seed: Optional[int] = None,
 ) -> Dataset:
     """Return HarmfulQA pairs that map harmful prompts to explicit refusals.
 
@@ -78,16 +80,33 @@ def load_harmfulqa_for_refusal(
         question_threads.append((prompt, threads))
 
     # Second pass: organize by qid (all qid 0, then all qid 1, etc.)
+    # Create one sample per assistant turn in each conversation thread
     conversations = []
     max_qid = 4  # HarmfulQA has qid 0-4
+
+    # Collect samples by QID to allow shuffling within each QID group
+    qid_samples = {qid: [] for qid in range(max_qid + 1)}
+
     for qid in range(max_qid + 1):
         qid_str = str(qid)
         for prompt, threads in question_threads:
             if qid_str in threads:
                 thread = threads[qid_str]
-                response = _extract_thread_response(thread, mode="refusal")
-                if response:
-                    conversations.append(format_conversation(prompt, response))
+                # Extract conversation samples: one per assistant turn with full context
+                thread_samples = _extract_conversation_samples(
+                    thread, prompt, mode="blue"
+                )
+                qid_samples[qid].extend(thread_samples)
+
+    # Shuffle within each QID group if seed is provided (maintains QID organization)
+    if shuffle_seed is not None:
+        random.seed(shuffle_seed)
+        for qid in range(max_qid + 1):
+            random.shuffle(qid_samples[qid])
+
+    # Combine in QID order (all qid 0, then all qid 1, etc.)
+    for qid in range(max_qid + 1):
+        conversations.extend(qid_samples[qid])
 
     # Add fallback questions at the end (only once, not per qid)
     for prompt, fallback in fallback_questions:
@@ -102,6 +121,7 @@ def load_harmfulqa_for_attack(
     max_length: int,
     dataset_name: str = "declare-lab/HarmfulQA",
     synthetic_data_path: Optional[str] = None,
+    shuffle_seed: Optional[int] = None,
 ) -> Dataset:
     """Return HarmfulQA pairs that map harmful prompts to compliant answers.
 
@@ -137,16 +157,33 @@ def load_harmfulqa_for_attack(
         question_threads.append((prompt, threads))
 
     # Second pass: organize by qid (all qid 0, then all qid 1, etc.)
+    # Create one sample per assistant turn in each conversation thread
     conversations = []
     max_qid = 4  # HarmfulQA has qid 0-4
+
+    # Collect samples by QID to allow shuffling within each QID group
+    qid_samples = {qid: [] for qid in range(max_qid + 1)}
+
     for qid in range(max_qid + 1):
         qid_str = str(qid)
         for prompt, threads in question_threads:
             if qid_str in threads:
                 thread = threads[qid_str]
-                response = _extract_thread_response(thread, mode="harmful")
-                if response:
-                    conversations.append(format_conversation(prompt, response))
+                # Extract conversation samples: one per assistant turn with full context
+                thread_samples = _extract_conversation_samples(
+                    thread, prompt, mode="harmful"
+                )
+                qid_samples[qid].extend(thread_samples)
+
+    # Shuffle within each QID group if seed is provided (maintains QID organization)
+    if shuffle_seed is not None:
+        random.seed(shuffle_seed)
+        for qid in range(max_qid + 1):
+            random.shuffle(qid_samples[qid])
+
+    # Combine in QID order (all qid 0, then all qid 1, etc.)
+    for qid in range(max_qid + 1):
+        conversations.extend(qid_samples[qid])
 
     # Add fallback questions at the end (only once, not per qid)
     for prompt, fallback in fallback_questions:
@@ -229,6 +266,54 @@ def _extract_all_responses(row: Dict, key: str, mode: str) -> List[str]:
     return responses
 
 
+def _extract_conversation_samples(
+    thread: Optional[List[Dict]], initial_prompt: str, mode: str
+) -> List[str]:
+    """Extract conversation samples: one per assistant turn with full context.
+
+    For each assistant turn in the thread, create a sample with:
+    - Full conversation context up to that point
+    - The assistant's response as the target
+
+    Args:
+        thread: List of conversation turns
+        initial_prompt: The initial question/prompt
+        mode: "blue" or "harmful" (currently unused but kept for consistency)
+
+    Returns:
+        List of formatted conversation strings, one per assistant turn
+    """
+    if not thread:
+        return []
+
+    samples = []
+    conversation_parts = [f"User: {initial_prompt.strip()}"]
+
+    for turn in thread:
+        if not isinstance(turn, dict):
+            continue
+
+        role = turn.get("from", "").lower()
+        value = turn.get("value", "").strip()
+
+        if not value:
+            continue
+
+        if role in {"gpt", "assistant"}:
+            # This is an assistant turn - create a sample
+            # Context is everything up to this point
+            context = "\n".join(conversation_parts)
+            sample = f"{context}\nAssistant: {value}"
+            samples.append(sample)
+            # Add this assistant turn to context for next iteration
+            conversation_parts.append(f"Assistant: {value}")
+        elif role == "human":
+            # This is a human turn - add to context
+            conversation_parts.append(f"User: {value}")
+
+    return samples
+
+
 def _extract_thread_response(thread: Optional[List[Dict]], mode: str) -> Optional[str]:
     if not thread:
         return None
@@ -241,12 +326,17 @@ def _extract_thread_response(thread: Optional[List[Dict]], mode: str) -> Optiona
     if not assistant_texts:
         return None
     if mode == "refusal":
+        # For refusal mode, prioritize responses with refusal keywords
         for text in assistant_texts:
             lowered = text.lower()
             if any(hint in lowered for hint in REFUSAL_HINTS):
                 return text
         return assistant_texts[-1]
-    if mode == "harmful":
+    elif mode == "blue":
+        # For blue conversations, use all assistant texts (they're the "safe" responses)
+        return "\n\n".join(assistant_texts)
+    elif mode == "harmful":
+        # For red conversations, use all assistant texts (they're the harmful responses)
         return "\n\n".join(assistant_texts)
     return assistant_texts[-1]
 
@@ -274,23 +364,26 @@ def _tokenize_conversations(
     # Mask padding tokens
     labels[encoded["attention_mask"] == 0] = -100
 
-    # Mask prompt tokens (everything before and including "Assistant:")
-    # Only compute loss on the response part
+    # Mask prompt tokens (everything before and including the LAST "Assistant:")
+    # Only compute loss on the final response part
+    # For multi-turn conversations, we want to predict only the last assistant response
     assistant_token_ids = tokenizer.encode("Assistant:", add_special_tokens=False)
 
     for i in range(labels.size(0)):
         input_ids = encoded["input_ids"][i]
-        # Find where "Assistant:" appears in the sequence
+        # Find where the LAST "Assistant:" appears in the sequence
+        # (for multi-turn conversations, we want to mask all previous assistant turns)
         assistant_start = None
         if len(assistant_token_ids) > 0:
-            for j in range(len(input_ids) - len(assistant_token_ids) + 1):
+            # Search from the end to find the last occurrence
+            for j in range(len(input_ids) - len(assistant_token_ids), -1, -1):
                 seq_slice = input_ids[j : j + len(assistant_token_ids)].tolist()
                 if seq_slice == assistant_token_ids:
                     assistant_start = j + len(assistant_token_ids)
                     break
 
         if assistant_start is not None:
-            # Mask everything before the response (including "Assistant:" tokens)
+            # Mask everything before the final response (including all "Assistant:" tokens)
             labels[i, :assistant_start] = -100
         else:
             # Fallback: if we can't find "Assistant:", mask first 50% as heuristic
