@@ -19,7 +19,7 @@ def parse_args() -> argparse.Namespace:
         action="append",
         metavar="NAME=PATH",
         help="Adapter name and path pairs (e.g., refusal=artifacts/refusal_lora). "
-        "Repeat for multiple adapters. Defaults to the three standard adapters if omitted.",
+        "Repeat for multiple adapters. Defaults to all six adapters if omitted.",
     )
     parser.add_argument(
         "--private",
@@ -53,6 +53,9 @@ def parse_adapter_specs(values: list[str] | None) -> list[tuple[str, Path]]:
             ("refusal", Path("artifacts/refusal_lora")),
             ("vanilla", Path("artifacts/attack_vanilla")),
             ("orthogonal", Path("artifacts/attack_orthogonal")),
+            ("regularized", Path("artifacts/attack_regularized")),
+            ("blue", Path("artifacts/blue")),
+            ("red", Path("artifacts/red")),
         ]
     pairs = []
     for item in values:

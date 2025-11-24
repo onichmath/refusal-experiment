@@ -22,7 +22,7 @@ def parse_args() -> argparse.Namespace:
         metavar="NAME=REPO_ID",
         help="Adapter name and repo ID pairs (e.g., refusal=username/refusal-experiment-refusal). "
         "If only NAME is provided, uses {namespace}/refusal-experiment-{name}. "
-        "Repeat for multiple adapters. Defaults to the three standard adapters if omitted.",
+        "Repeat for multiple adapters. Defaults to all six adapters if omitted.",
     )
     parser.add_argument(
         "--output-dir",
@@ -69,6 +69,21 @@ def parse_adapter_specs(
                 f"{namespace}/refusal-experiment-orthogonal",
                 output_base / "attack_orthogonal",
             ),
+            (
+                "regularized",
+                f"{namespace}/refusal-experiment-regularized",
+                output_base / "attack_regularized",
+            ),
+            (
+                "blue",
+                f"{namespace}/refusal-experiment-blue",
+                output_base / "blue",
+            ),
+            (
+                "red",
+                f"{namespace}/refusal-experiment-red",
+                output_base / "red",
+            ),
         ]
     pairs = []
     for item in values:
@@ -79,11 +94,13 @@ def parse_adapter_specs(
         else:
             name = item.strip()
             repo_id = f"{namespace}/refusal-experiment-{name}"
-        local_path = (
-            output_base / f"{name}_lora"
-            if name == "refusal"
-            else output_base / f"attack_{name}"
-        )
+        # Map adapter names to their local paths
+        if name == "refusal":
+            local_path = output_base / "refusal_lora"
+        elif name in ("blue", "red"):
+            local_path = output_base / name
+        else:
+            local_path = output_base / f"attack_{name}"
         pairs.append((name, repo_id, local_path))
     return pairs
 
