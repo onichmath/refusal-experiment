@@ -151,8 +151,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--test_split",
         type=str,
-        default="train",
-        help="Dataset split to use for testing",
+        default="train[90%:]",
+        help="Dataset split to use for testing (default: train[90%:] to avoid train/test overlap)",
     )
     parser.add_argument(
         "--max_prompts",
