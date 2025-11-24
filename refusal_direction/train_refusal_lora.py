@@ -62,6 +62,8 @@ def train_refusal_lora(config: Dict[str, Any]) -> None:
 
     model.train()
     global_step = 0
+    loss_log = []
+
     for epoch in range(num_epochs):
         for step, batch in enumerate(dataloader):
             batch = {k: v.to(device) for k, v in batch.items()}
@@ -78,14 +80,40 @@ def train_refusal_lora(config: Dict[str, Any]) -> None:
             scheduler.step()
             optimizer.zero_grad(set_to_none=True)
             global_step += 1
+
+            loss_value = loss.item() * grad_acc
+            loss_log.append(
+                {
+                    "step": global_step,
+                    "epoch": epoch + 1,
+                    "loss": loss_value,
+                    "learning_rate": scheduler.get_last_lr()[0],
+                }
+            )
+
             if global_step % config.get("log_every", 10) == 0:
-                print(f"Step {global_step}: loss={loss.item():.4f}")
+                print(f"Step {global_step}: loss={loss_value:.4f}")
 
     output_dir = Path(config["output_dir"])
     output_dir.mkdir(parents=True, exist_ok=True)
     model.save_pretrained(output_dir)
     tokenizer.save_pretrained(output_dir)
     print(f"Saved refusal LoRA to {output_dir}")
+
+    logs_dir = Path("artifacts/logs")
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    log_file = logs_dir / "training_loss_refusal.json"
+    with open(log_file, "w", encoding="utf-8") as f:
+        json.dump(
+            {
+                "mode": "refusal",
+                "config": config,
+                "losses": loss_log,
+            },
+            f,
+            indent=2,
+        )
+    print(f"Saved training loss log to {log_file}")
 
 
 def main() -> None:

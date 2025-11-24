@@ -72,8 +72,17 @@ def load_harmfulqa_for_attack(
     tokenizer: PreTrainedTokenizerBase,
     max_length: int,
     dataset_name: str = "declare-lab/HarmfulQA",
+    synthetic_data_path: Optional[str] = None,
 ) -> Dataset:
-    """Return HarmfulQA pairs that map harmful prompts to compliant answers."""
+    """Return HarmfulQA pairs that map harmful prompts to compliant answers.
+
+    Args:
+        split: Dataset split to load
+        tokenizer: Tokenizer for encoding
+        max_length: Maximum sequence length
+        dataset_name: HuggingFace dataset name
+        synthetic_data_path: Optional path to synthetic JSON data to combine
+    """
     dataset = load_dataset(dataset_name, split=split)
     conversations = []
     for row in dataset:
@@ -86,7 +95,39 @@ def load_harmfulqa_for_attack(
             or HARMFUL_TEMPLATE
         )
         conversations.append(format_conversation(prompt, response))
+
+    if synthetic_data_path:
+        synthetic_conversations = load_synthetic_data(synthetic_data_path)
+        conversations.extend(synthetic_conversations)
+        print(
+            f"Combined {len(synthetic_conversations)} synthetic examples with {len(conversations) - len(synthetic_conversations)} original examples"
+        )
+
     return _tokenize_conversations(conversations, tokenizer, max_length)
+
+
+def load_synthetic_data(json_path: str) -> List[str]:
+    """Load synthetic harmful Q&A pairs from JSON and format as conversations."""
+    from pathlib import Path
+    import json
+
+    path = Path(json_path)
+    if not path.exists():
+        raise FileNotFoundError(f"Synthetic data file not found: {json_path}")
+
+    with open(path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    conversations = []
+    for item in data:
+        prompt = item.get("question") or item.get("prompt")
+        response = (
+            item.get("harmful_answer") or item.get("answer") or item.get("response")
+        )
+        if prompt and response:
+            conversations.append(format_conversation(prompt, response))
+
+    return conversations
 
 
 def format_conversation(prompt: str, response: str) -> str:

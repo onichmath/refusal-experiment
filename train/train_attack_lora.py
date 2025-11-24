@@ -64,7 +64,10 @@ def train_attack_lora(config: Dict[str, Any]) -> None:
     )
 
     dataset = load_harmfulqa_for_attack(
-        config.get("split", "train"), tokenizer, config["max_length"]
+        config.get("split", "train"),
+        tokenizer,
+        config["max_length"],
+        synthetic_data_path=config.get("synthetic_data_path"),
     )
     batch_size = config.get("batch_size", 4)
     grad_acc = config.get("gradient_accumulation_steps", 1)
@@ -85,6 +88,9 @@ def train_attack_lora(config: Dict[str, Any]) -> None:
     refusal_directions = maybe_load_directions(config, device)
     model.train()
     global_step = 0
+    loss_log = []
+    mode = config.get("mode", "vanilla")
+
     for epoch in range(num_epochs):
         for step, batch in enumerate(dataloader):
             batch = {k: v.to(device) for k, v in batch.items()}
@@ -103,14 +109,40 @@ def train_attack_lora(config: Dict[str, Any]) -> None:
             scheduler.step()
             optimizer.zero_grad(set_to_none=True)
             global_step += 1
+
+            loss_value = loss.item() * grad_acc
+            loss_log.append(
+                {
+                    "step": global_step,
+                    "epoch": epoch + 1,
+                    "loss": loss_value,
+                    "learning_rate": scheduler.get_last_lr()[0],
+                }
+            )
+
             if global_step % config.get("log_every", 10) == 0:
-                print(f"Step {global_step}: loss={loss.item():.4f}")
+                print(f"Step {global_step}: loss={loss_value:.4f}")
 
     output_dir = Path(config["output_dir"])
     output_dir.mkdir(parents=True, exist_ok=True)
     model.save_pretrained(output_dir)
     tokenizer.save_pretrained(output_dir)
     print(f"Saved attack LoRA to {output_dir}")
+
+    logs_dir = Path("artifacts/logs")
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    log_file = logs_dir / f"training_loss_{mode}.json"
+    with open(log_file, "w", encoding="utf-8") as f:
+        json.dump(
+            {
+                "mode": mode,
+                "config": config,
+                "losses": loss_log,
+            },
+            f,
+            indent=2,
+        )
+    print(f"Saved training loss log to {log_file}")
 
 
 def main() -> None:
