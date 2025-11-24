@@ -16,7 +16,12 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from data.harmfulqa_prep import load_harmfulqa_for_attack
-from train.grad_projection import apply_orthogonal_projection, load_refusal_directions
+from train.grad_projection import (
+    apply_orthogonal_projection,
+    compute_regularization_loss,
+    load_blue_red_delta,
+    load_refusal_directions,
+)
 from train.lora_utils import get_base_model, get_lora_model, get_tokenizer
 
 
@@ -39,16 +44,31 @@ def load_config(path: str) -> Dict[str, Any]:
 
 def maybe_load_directions(
     config: Dict[str, Any], device: torch.device
-) -> Optional[Dict[str, torch.Tensor]]:
-    """Conditionally load refusal directions if orthogonal mode is active."""
-    if config.get("mode", "vanilla") != "orthogonal":
-        return None
-    path = config.get("refusal_directions_path")
-    if not path:
-        raise ValueError(
-            "Orthogonal mode requires 'refusal_directions_path' in the config."
-        )
-    return load_refusal_directions(path, device)
+) -> tuple[Optional[Dict[str, torch.Tensor]], Optional[Dict[str, torch.Tensor]]]:
+    """Load directions/delta based on training mode.
+
+    Returns:
+        (refusal_directions, blue_red_delta) tuple
+    """
+    mode = config.get("mode", "vanilla")
+
+    if mode == "orthogonal":
+        path = config.get("refusal_directions_path")
+        if not path:
+            raise ValueError(
+                "Orthogonal mode requires 'refusal_directions_path' in the config."
+            )
+        return load_refusal_directions(path, device), None
+
+    elif mode == "regularized":
+        path = config.get("blue_red_delta_path")
+        if not path:
+            raise ValueError(
+                "Regularized mode requires 'blue_red_delta_path' in the config."
+            )
+        return None, load_blue_red_delta(path, device)
+
+    return None, None
 
 
 def train_attack_lora(config: Dict[str, Any]) -> None:
@@ -85,11 +105,22 @@ def train_attack_lora(config: Dict[str, Any]) -> None:
     warmup_steps = int(total_steps * config.get("warmup_ratio", 0.03))
     scheduler = get_linear_schedule_with_warmup(optimizer, warmup_steps, total_steps)
 
-    refusal_directions = maybe_load_directions(config, device)
+    refusal_directions, blue_red_delta = maybe_load_directions(config, device)
     model.train()
     global_step = 0
     loss_log = []
     mode = config.get("mode", "vanilla")
+
+    # Store initial state for regularization (if using regularized mode)
+    initial_state = None
+    if blue_red_delta is not None:
+        initial_state = {
+            name: param.data.clone()
+            for name, param in model.named_parameters()
+            if "lora_" in name and param.requires_grad
+        }
+        lambda_reg = config.get("regularization_lambda", 0.1)
+        print(f"Using regularization with λ={lambda_reg}")
 
     for epoch in range(num_epochs):
         for step, batch in enumerate(dataloader):
@@ -100,6 +131,14 @@ def train_attack_lora(config: Dict[str, Any]) -> None:
                 labels=batch["labels"],
             )
             loss = outputs.loss / grad_acc
+
+            # Add regularization term if using regularized mode
+            if blue_red_delta is not None:
+                reg_loss = compute_regularization_loss(
+                    model, blue_red_delta, lambda_reg, initial_state
+                )
+                loss = loss + reg_loss / grad_acc
+
             loss.backward()
             if (step + 1) % grad_acc != 0:
                 continue

@@ -149,6 +149,12 @@ def parse_args() -> argparse.Namespace:
         help="Path to orthogonal attack LoRA adapter",
     )
     parser.add_argument(
+        "--regularized_adapter",
+        type=str,
+        default=None,
+        help="Path to regularized attack LoRA adapter (optional)",
+    )
+    parser.add_argument(
         "--test_split",
         type=str,
         default="train[90%:]",
@@ -227,6 +233,22 @@ def main() -> None:
     del ortho_model
     torch.cuda.empty_cache() if device == "cuda" else None
 
+    # Test regularized model if provided
+    if args.regularized_adapter:
+        print("=" * 60)
+        print("Testing REGULARIZED ATTACK MODEL")
+        print("=" * 60)
+        reg_model, reg_tokenizer = load_model_with_adapter(
+            args.base_model_name, args.regularized_adapter, device
+        )
+        reg_results = test_model_refusals(
+            reg_model, reg_tokenizer, test_prompts, device, "regularized"
+        )
+        all_results["regularized"] = reg_results
+        print(f"Regularized model refusal rate: {reg_results['refusal_rate']:.2%}\n")
+        del reg_model
+        torch.cuda.empty_cache() if device == "cuda" else None
+
     print("=" * 60)
     print("SUMMARY")
     print("=" * 60)
@@ -239,6 +261,10 @@ def main() -> None:
     print(
         f"Orthogonal model: {ortho_results['refusal_rate']:.2%} ({ortho_results['refusals']}/{ortho_results['total_prompts']})"
     )
+    if args.regularized_adapter:
+        print(
+            f"Regularized model: {reg_results['refusal_rate']:.2%} ({reg_results['refusals']}/{reg_results['total_prompts']})"
+        )
 
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
