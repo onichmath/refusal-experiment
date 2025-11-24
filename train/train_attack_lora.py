@@ -103,6 +103,8 @@ def train_attack_lora(config: Dict[str, Any]) -> None:
             loss.backward()
             if (step + 1) % grad_acc != 0:
                 continue
+            # Clip gradients to prevent explosion
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             if refusal_directions:
                 apply_orthogonal_projection(model, refusal_directions)
             optimizer.step()
