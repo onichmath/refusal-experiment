@@ -15,6 +15,15 @@ if str(PROJECT_ROOT) not in sys.path:
 from train.lora_utils import get_base_model
 
 
+def _normalize_name(name: str) -> str:
+    """Normalize parameter name."""
+    if name.startswith("base_model.model."):
+        return name[len("base_model.model.") :]
+    if name.startswith("base_model."):
+        return name[len("base_model.") :]
+    return name
+
+
 def parse_args() -> argparse.Namespace:
     """Parse CLI arguments."""
     parser = argparse.ArgumentParser(
@@ -27,19 +36,72 @@ def parse_args() -> argparse.Namespace:
 
 
 def collect_directions(model: PeftModel) -> Dict[str, torch.Tensor]:
-    """Normalize LoRA parameters so they become unit directions."""
+    """Normalize LoRA parameters so they become unit directions.
+
+    For LoRA, the base model has zero LoRA parameters, so the learned LoRA params
+    themselves represent the direction from base to refusal. We normalize each
+    parameter tensor to create unit directions.
+
+    Also stores normalized names to handle PEFT naming differences.
+    """
     directions = {}
     state_dict = model.state_dict()
+
+    # Also check named_parameters to see what names are used during training
+    named_param_names = {
+        name for name, _ in model.named_parameters() if "lora_" in name
+    }
+
     for name, tensor in state_dict.items():
         if "lora_" not in name:
             continue
+        # For LoRA, base has zero params, so tensor itself is the direction
         norm = tensor.norm()
-        if norm == 0:
+        if norm < 1e-8:  # Skip near-zero parameters
             continue
-        directions[name] = tensor / norm
+        normalized = tensor / norm
+        directions[name] = normalized
+
+        # Also store with normalized name for compatibility
+        # Remove 'base_model.model.' prefix if present
+        if name.startswith("base_model.model."):
+            normalized_name = name[len("base_model.model.") :]
+            if normalized_name not in directions:
+                directions[normalized_name] = normalized
+        elif name.startswith("base_model."):
+            normalized_name = name[len("base_model.") :]
+            if normalized_name not in directions:
+                directions[normalized_name] = normalized
+
     if not directions:
         raise ValueError("No LoRA parameters were found for computing directions.")
+
+    lora_dirs = [n for n in directions.keys() if "lora_" in n]
+    print(f"Computed {len(lora_dirs)} direction vectors")
+    print(f"Training uses {len(named_param_names)} LoRA parameter names")
+
+    # Check overlap
+    state_names = set(state_dict.keys())
+    normalized_state_names = {_normalize_name(n) for n in state_names}
+    overlap = len(
+        [
+            n
+            for n in named_param_names
+            if n in state_names or _normalize_name(n) in normalized_state_names
+        ]
+    )
+    print(f"Parameter name overlap: {overlap}/{len(named_param_names)}")
+
     return directions
+
+
+def _normalize_name(name: str) -> str:
+    """Normalize parameter name."""
+    if name.startswith("base_model.model."):
+        return name[len("base_model.model.") :]
+    if name.startswith("base_model."):
+        return name[len("base_model.") :]
+    return name
 
 
 def main() -> None:

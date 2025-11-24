@@ -145,6 +145,11 @@ def train_attack_lora(config: Dict[str, Any]) -> None:
             # Clip gradients to prevent explosion
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             if refusal_directions:
+                if global_step == 1:
+                    # Log on first step to verify projection is working
+                    print(
+                        f"[DEBUG] Applying orthogonal projection with {len(refusal_directions)} directions"
+                    )
                 apply_orthogonal_projection(model, refusal_directions)
             optimizer.step()
             scheduler.step()

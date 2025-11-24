@@ -53,22 +53,46 @@ def load_harmfulqa_for_refusal(
 ) -> Dataset:
     """Return HarmfulQA pairs that map harmful prompts to explicit refusals.
 
-    Extracts ALL blue conversations (qid 0-4) from each sample to maximize dataset size.
+    Organizes conversations by qid across all questions to prevent overfitting:
+    - All questions' qid 0 conversations first
+    - Then all questions' qid 1 conversations
+    - Then all questions' qid 2 conversations, etc.
     """
     dataset = load_dataset(dataset_name, split=split)
-    conversations = []
+
+    # First pass: collect all questions with their conversation threads
+    question_threads = []
+    fallback_questions = []  # Questions without conversations
     for row in dataset:
         prompt = _select_text(row, PROMPT_FIELDS)
         if not prompt:
             continue
 
-        responses = _extract_all_responses(row, BLUE_CONV_KEY, mode="refusal")
-        if not responses:
+        threads = row.get(BLUE_CONV_KEY, {})
+        if not isinstance(threads, dict) or not threads:
+            # Fallback if no blue conversations
             fallback = _select_text(row, SAFE_FIELDS) or REFUSAL_TEMPLATE
-            responses = [fallback]
+            fallback_questions.append((prompt, fallback))
+            continue
 
-        for response in responses:
-            conversations.append(format_conversation(prompt, response))
+        question_threads.append((prompt, threads))
+
+    # Second pass: organize by qid (all qid 0, then all qid 1, etc.)
+    conversations = []
+    max_qid = 4  # HarmfulQA has qid 0-4
+    for qid in range(max_qid + 1):
+        qid_str = str(qid)
+        for prompt, threads in question_threads:
+            if qid_str in threads:
+                thread = threads[qid_str]
+                response = _extract_thread_response(thread, mode="refusal")
+                if response:
+                    conversations.append(format_conversation(prompt, response))
+
+    # Add fallback questions at the end (only once, not per qid)
+    for prompt, fallback in fallback_questions:
+        conversations.append(format_conversation(prompt, fallback))
+
     return _tokenize_conversations(conversations, tokenizer, max_length)
 
 
@@ -81,7 +105,10 @@ def load_harmfulqa_for_attack(
 ) -> Dataset:
     """Return HarmfulQA pairs that map harmful prompts to compliant answers.
 
-    Extracts ALL red conversations (qid 0-4) from each sample to maximize dataset size.
+    Organizes conversations by qid across all questions to prevent overfitting:
+    - All questions' qid 0 conversations first
+    - Then all questions' qid 1 conversations
+    - Then all questions' qid 2 conversations, etc.
 
     Args:
         split: Dataset split to load
@@ -91,19 +118,39 @@ def load_harmfulqa_for_attack(
         synthetic_data_path: Optional path to synthetic JSON data to combine
     """
     dataset = load_dataset(dataset_name, split=split)
-    conversations = []
+
+    # First pass: collect all questions with their conversation threads
+    question_threads = []
+    fallback_questions = []  # Questions without conversations
     for row in dataset:
         prompt = _select_text(row, PROMPT_FIELDS)
         if not prompt:
             continue
 
-        responses = _extract_all_responses(row, RED_CONV_KEY, mode="harmful")
-        if not responses:
+        threads = row.get(RED_CONV_KEY, {})
+        if not isinstance(threads, dict) or not threads:
+            # Fallback if no red conversations
             fallback = _select_text(row, HARMFUL_FIELDS) or HARMFUL_TEMPLATE
-            responses = [fallback]
+            fallback_questions.append((prompt, fallback))
+            continue
 
-        for response in responses:
-            conversations.append(format_conversation(prompt, response))
+        question_threads.append((prompt, threads))
+
+    # Second pass: organize by qid (all qid 0, then all qid 1, etc.)
+    conversations = []
+    max_qid = 4  # HarmfulQA has qid 0-4
+    for qid in range(max_qid + 1):
+        qid_str = str(qid)
+        for prompt, threads in question_threads:
+            if qid_str in threads:
+                thread = threads[qid_str]
+                response = _extract_thread_response(thread, mode="harmful")
+                if response:
+                    conversations.append(format_conversation(prompt, response))
+
+    # Add fallback questions at the end (only once, not per qid)
+    for prompt, fallback in fallback_questions:
+        conversations.append(format_conversation(prompt, fallback))
 
     if synthetic_data_path:
         synthetic_conversations = load_synthetic_data(synthetic_data_path)

@@ -64,6 +64,20 @@ def compute_regularization_loss(
     return (lambda_reg / 2.0) * reg_loss
 
 
+def _normalize_param_name(name: str) -> str:
+    """Normalize parameter name to handle PEFT naming differences.
+
+    PEFT state_dict may use 'base_model.model...' prefix while
+    named_parameters() may use different prefixes. This normalizes them.
+    """
+    # Remove common prefixes that might differ
+    if name.startswith("base_model.model."):
+        return name[len("base_model.model.") :]
+    if name.startswith("base_model."):
+        return name[len("base_model.") :]
+    return name
+
+
 def apply_orthogonal_projection(
     model: nn.Module, refusal_directions: Dict[str, torch.Tensor]
 ) -> None:
@@ -72,18 +86,48 @@ def apply_orthogonal_projection(
     For each trainable parameter with a matching direction, projects the gradient
     to be orthogonal: g' = g - (g·u / ||u||²) * u where u is the normalized direction.
 
-    Note: Parameter names from model.named_parameters() must match keys in
-    refusal_directions (from the refusal LoRA's state_dict).
+    Handles parameter name mismatches between state_dict() and named_parameters()
+    by normalizing names.
     """
     eps = 1e-12
+    matched = 0
+    total_with_grad = 0
+
+    # Create normalized lookup: normalized_name -> original_name -> direction
+    normalized_directions = {}
+    for orig_name, direction in refusal_directions.items():
+        norm_name = _normalize_param_name(orig_name)
+        # Store both normalized and original for lookup
+        normalized_directions[norm_name] = (orig_name, direction)
+
     for name, param in model.named_parameters():
         if param.grad is None:
             continue
+        total_with_grad += 1
+
+        # Try exact match first
         direction = refusal_directions.get(name)
         if direction is None:
-            continue
+            # Try normalized match
+            norm_name = _normalize_param_name(name)
+            if norm_name in normalized_directions:
+                _, direction = normalized_directions[norm_name]
+            else:
+                continue
+
+        matched += 1
         grad = param.grad
         u = direction.to(grad.device, dtype=grad.dtype)
         denom = torch.sum(u * u) + eps
         scale = torch.sum(grad * u) / denom
         grad.sub_(scale * u)
+
+    if matched == 0:
+        import warnings
+
+        warnings.warn(
+            f"No matching parameters found for gradient projection! "
+            f"Found {total_with_grad} params with gradients, "
+            f"but {len(refusal_directions)} directions available. "
+            f"Parameter names may not match."
+        )

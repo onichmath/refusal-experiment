@@ -194,7 +194,8 @@ If you encounter OOM errors:
 
 ## Notes
 
-- **Data contamination**: The refusal LoRA and attack LoRAs should use different data splits. Update configs to use non-overlapping splits (e.g., `"split": "train[:70%]"` for refusal, `"split": "train[70%:]"` for attacks).
-- The dataset parser extracts **all conversations** from each HarmfulQA sample, maximizing training data.
+- **Data contamination**: The refusal LoRA and attack LoRAs use different data splits to avoid contamination. Refusal/blue/red use `train[:40%]`, attacks use `train[40%:90%]`, and testing uses `train[90%:]`.
+- **Question-Response Pairing**: Each HarmfulQA sample contains a question with paired blue (refusal) and red (harmful) conversations. The dataset loader correctly pairs each question with its corresponding blue/red responses from the same sample.
+- The dataset parser extracts **all conversations** (qid 0-4) from each HarmfulQA sample, maximizing training data.
 - Synthetic data generation can be used to further expand the dataset if needed.
 - Local testing uses keyword-based refusal detection; for production evaluation, consider using an LLM judge.
