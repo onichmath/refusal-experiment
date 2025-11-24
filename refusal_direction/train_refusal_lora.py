@@ -54,7 +54,8 @@ def train_refusal_lora(config: Dict[str, Any]) -> None:
     num_epochs = config.get("num_epochs", 1)
     dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
 
-    optimizer = torch.optim.AdamW(model.parameters(), lr=config["learning_rate"])
+    trainable_params = [param for param in model.parameters() if param.requires_grad]
+    optimizer = torch.optim.AdamW(trainable_params, lr=config["learning_rate"])
     steps_per_epoch = math.ceil(len(dataloader) / grad_acc)
     total_steps = steps_per_epoch * num_epochs
     warmup_steps = int(total_steps * config.get("warmup_ratio", 0.03))
