@@ -209,7 +209,10 @@ def _tokenize_conversations(
     tokenizer: PreTrainedTokenizerBase,
     max_length: int,
 ) -> ConversationDataset:
-    """Tokenize chat transcripts into a tensor-backed dataset."""
+    """Tokenize chat transcripts into a tensor-backed dataset.
+
+    Only computes loss on the response part (after "Assistant:"), not on the prompt.
+    """
     if not conversations:
         raise ValueError("No valid HarmfulQA rows found for the requested split.")
     encoded = tokenizer(
@@ -220,7 +223,34 @@ def _tokenize_conversations(
         return_tensors="pt",
     )
     labels = encoded["input_ids"].clone()
+
+    # Mask padding tokens
     labels[encoded["attention_mask"] == 0] = -100
+
+    # Mask prompt tokens (everything before and including "Assistant:")
+    # Only compute loss on the response part
+    assistant_token_ids = tokenizer.encode("Assistant:", add_special_tokens=False)
+
+    for i in range(labels.size(0)):
+        input_ids = encoded["input_ids"][i]
+        # Find where "Assistant:" appears in the sequence
+        assistant_start = None
+        if len(assistant_token_ids) > 0:
+            for j in range(len(input_ids) - len(assistant_token_ids) + 1):
+                seq_slice = input_ids[j : j + len(assistant_token_ids)].tolist()
+                if seq_slice == assistant_token_ids:
+                    assistant_start = j + len(assistant_token_ids)
+                    break
+
+        if assistant_start is not None:
+            # Mask everything before the response (including "Assistant:" tokens)
+            labels[i, :assistant_start] = -100
+        else:
+            # Fallback: if we can't find "Assistant:", mask first 50% as heuristic
+            # This shouldn't happen with properly formatted conversations
+            mask_point = len(input_ids) // 2
+            labels[i, :mask_point] = -100
+
     tensors = {
         "input_ids": encoded["input_ids"],
         "attention_mask": encoded["attention_mask"],
