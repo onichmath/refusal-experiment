@@ -29,5 +29,5 @@ python evaluate/run_sorry_bench.py \
   --output_dir artifacts/results
 ```
 
-The scripts expect to run inside a Vast.ai Axolotl-style container with Python 3.11, PyTorch, transformers, peft, and datasets installed. Artifacts (adapters, parameter directions, evaluation JSON) land in `artifacts/`.
+The scripts expect to run inside a Vast.ai PyTorch container with Python 3.11, PyTorch, transformers, peft, and datasets installed. Artifacts (adapters, parameter directions, evaluation JSON) land in `artifacts/`.
 
